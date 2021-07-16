@@ -1,178 +1,178 @@
-#function ray_interfaces = RayTracer2(ray_startingpoints, rays, surfacelist, ...
-# %     max_scatters, min_travel_length, follow_threshold, tir_handling, full_output, singlechild, output_raytable)
-# %
-# % RayTracer2 propagates a set of rays through a geometry of reflecting and
-# % refracting surfaces.  The function inputs a set of initial rays and a
-# % list of surfaces.  It loops over surfaces, finding the intersection point
-# % of each ray with each surface, to determine the next scattering point of
-# % each ray.  Reflected and refracted rays are generated according to the
-# % surface properties.  The function iterates with the new set of rays,
-# % until all rays drop below threshold or the maximum number of scatters is
-# % reached.  The history of each ray is output in a structure array.
-# %
-# % Advances since RayTracer include bulk absorption and Rayleigh scattering,
-# % advanced surface modeling (following Geant4's Optical Photon "unified"
-# % surface physics) and maybe some other things I haven't thought of yet.
-# % This *is* backwards compatible -- if you give it the same input as
-# % RayTracer it will work just fine -- but it may be slightly slower.
-# %
-# % inputs:
-# %           ray_startingpoints  -  N-by-3 matrix, where N is the number of
-# %                                    initial rays to follow, giving the
-# %                                    starting point for each ray.
-# %           rays                -  N-by-10 matrix giving the initial
-# %                                    direction, intensity, and polarization
-# %                                    of each ray.  The first 3 columns give
-# %                                    the forward direction of the ray
-# %                                    (these will be normalized if they
-# %                                    aren't already), columns 4-6 give a
-# %                                    direction non-parallel to the ray that
-# %                                    defines the s1 polarization axis
-# %                                    (these will be made normal to the ray
-# %                                    direction and normalized, if they
-# %                                    aren't already), and columns 7-10 are
-# %                                    the stokes parameters s0-s3, giving
-# %                                    the intensity and polarization of the
-# %                                    ray ( s0 gives the total intensity,
-# %                                    and s0^2 >= s1^2 + s2^2 + s3^2, see
-# %                                    7.2 in Jackson for more details)
-# %           surfacelist         -  A structure array defining the geometry
-# %                                    of scattering surfaces -- see
-# %                                    Create2LGeometry for details
-# %           max_scatters        -  The maximum number of scatters to
-# %                                    propagate rays through (the simulation
-# %                                    may stop before this point if there
-# %                                    are no rays above threshold left to
-# %                                    follow).
-# %           min_travel_length   -  A minimum travel length between
-# %                                    scatters.  This prevents rounding
-# %                                    errors from causing a ray to scatter
-# %                                    multiple times at the same point.
-# %                                    Rays with legitimate travel lengths
-# %                                    below this value will be INCORRECTLY
-# %                                    RECONSTRUCTED, so keep this small
-# %                                    (~1e-5 times your smallest dimension
-# %                                    is probably sufficient for most
-# %                                    geometries.)
-# %           follow_threshold    -  Refracted or reflected rays with an s0
-# %                                    below follow_threshold(1) or
-# %                                    follow_threshold(2), respectively,
-# %                                    will not be followed.  If
-# %                                    follow_threshold is a scalar, the same
-# %                                    threshold is used for both.
-# %           tir_handling        -   This determines what the refracted_rays
-# %                                     output is in the case of total internal
-# %                                     reflection.  The default (-1) gives a
-# %                                     refracted ray tangent to the surface with
-# %                                     zero intensity.  Any value >=0 will give
-# %                                     a ray with the same direction and
-# %                                     polarization as the reflected ray, with
-# %                                     intensity equal to the reflected
-# %                                     intensity times tir_handling.  This lets
-# %                                     you treat tir-rays like refracted rays,
-# %                                     which can be handy in geometry sims.
-# %                                     NOTE -- if follow_threshold(2) is
-# %                                     bigger than max(rays(:,7)) then
-# %                                     default tir_handling=1.
-# %           full_output         -   If false, the ray_interfaces output is
-# %                                     not populated.  Default is true.
-# %           singlechild         -   If true, then reflected/refracted rays
-# %                                     are never both followed, rather one
-# %                                     is chosen by a dice roll, and the ray
-# %                                     index is always positive.  If false,
-# %                                     this follows the old RayTracer
-# %                                     standard of following both reflected
-# %                                     and refracted rays, with purely
-# %                                     refracted trajectories only getting
-# %                                     the positive index.  Default is true.
-# %           output_raytable     -   If false, the raytable output is not
-# %                                     populated.  Default is false.
-# %
-# % output:
-# %       ray_interfaces  -  a structure array, where the array index is the
-# %                            scatter number.  Each element in the array has
-# %                            the following fields:
-# %           incoming_ray        -  M-by-10 array, where M is the number of
-# %                                    rays scattering in this iteration,
-# %                                    giving the direction, intensity, and
-# %                                    polarization of the incoming rays.
-# %                                    Rays that do not scatter are not
-# %                                    reported (to report all rays, enclose
-# %                                    your geometry in an absorbing box, for
-# %                                    example).
-# %           reflected_ray       -  M-by-10 array, giving the direction,
-# %                                    intensity, and polarization of the
-# %                                    reflected rays
-# %           refracted_ray       -  M-by-10 array, giving the direction,
-# %                                    intensity, and polarization of the
-# %                                    refracted rays
-# %           intersection_point  -  M-by-3 array, giving the points where
-# %                                    the incoming rays scatter
-# %           surface_normal      -  M-by-3 array, giving the
-# %                                    backward-pointing surface normal at
-# %                                    the intersection_point
-# %           ray_index           -  M-by-1 vector, giving the index of the
-# %                                    incoming ray (the input rays are
-# %                                    numbered 1:N) -- a negative ray_index
-# %                                    means the ray has undergone at least
-# %                                    one reflection in its history, so
-# %                                    there will be at most one ray with a
-# %                                    given positive index
-# %           surface_index       -  M-by-1 vector, giving the index of the
-# %                                    scattering surface hit by each
-# %                                    incoming_ray, where the index
-# %                                    indicates an element of the input
-# %                                    surfacelist.  Negative values indicate
-# %                                    an outward ray, positive values an
-# %                                    inward ray, as defined in the
-# %                                    surface geometry.
-# %           distace_traveled    -  M-by-1 vector, giving the distance
-# %                                    traveled by the ray since its last
-# %                                    scatter
-# %           n_incident          -  M-by-1 vector, giving the index of
-# %                                    refraction for the incoming ray
-# %           n_transmitted       -  M-by-1 vector, giving the index of
-# %                                    refraction for the refracted ray
-# %           bulkabs_incident    -  M-by-1 vector, giving the absorption
-# %                                    length for the incoming ray
-# %           bulkabs_transmitted -  M-by-1 vector, giving the absorbtion
-# %                                    length for the refracted ray
-# %           rayleigh_incident   -  M-by-1 vector, giving the rayleigh
-# %                                    scattering length for the incoming ray
-# %           rayleigh_transmitted-  M-by-1 vector, giving the rayleigh
-# %                                    scattering length for the refracted ray
-# %
-# %       absorption_table        -  Array of size [K, 5, S, 2], where
-# %                                    K=max_scatters, S=length(surfacelist)
-# %                                    Giving total intensity absorbed at
-# %                                    each scatter step.  2nd index
-# %                                    separates:
-# %                                       1 - Surface absorption
-# %                                       2 - Bulk absorption
-# %                                       3 - Escaped geometry
-# %                                       4 - Dropped below threshold
-# %                                       5 - Still following
-# %                                     3rd index identifies the surface
-# %                                     the ray is interacting with in that
-# %                                     step, 4th index indicates the ray's
-# %                                     orientation with respect to that
-# %                                     surface.  For `Escaped geometry'
-# %                                     rays, the previously hit surface is
-# %                                     indicated.
-# %       raytable                -  Array of size [K+1, N, 13] giving the
-# %                                     details of each ray's path through
-# %                                     the geometry, following positive ray
-# %                                     indices only.  First index is scatter
-# %                                     index, starting with initial
-# %                                     condition.  Second index is ray
-# %                                     index.  For third index, columns 1:3
-# %                                     give XYZ position, 4:13 give ray
-# %                                     details (direction, intensity,
-# %                                     polarization, as in rays input).
-# %                                 
-# % 
-# % RayTracer:  12/17/09, CED
-# % RayTracer2:  8/17/16, CED
+'''function ray_interfaces = RayTracer2(ray_startingpoints, rays, surfacelist, ...
+     max_scatters, min_travel_length, follow_threshold, tir_handling, full_output, singlechild, output_raytable)
+
+ RayTracer2 propagates a set of rays through a geometry of reflecting and
+ refracting surfaces.  The function inputs a set of initial rays and a
+ list of surfaces.  It loops over surfaces, finding the intersection point
+ of each ray with each surface, to determine the next scattering point of
+ each ray.  Reflected and refracted rays are generated according to the
+ surface properties.  The function iterates with the new set of rays,
+ until all rays drop below threshold or the maximum number of scatters is
+ reached.  The history of each ray is output in a structure array.
+
+ Advances since RayTracer include bulk absorption and Rayleigh scattering,
+ advanced surface modeling (following Geant4's Optical Photon "unified"
+ surface physics) and maybe some other things I haven't thought of yet.
+ This *is* backwards compatible -- if you give it the same input as
+ RayTracer it will work just fine -- but it may be slightly slower.
+
+ inputs:
+           ray_startingpoints  -  N-by-3 matrix, where N is the number of
+                                    initial rays to follow, giving the
+                                    starting point for each ray.
+           rays                -  N-by-10 matrix giving the initial
+                                    direction, intensity, and polarization
+                                    of each ray.  The first 3 columns give
+                                    the forward direction of the ray
+                                    (these will be normalized if they
+                                    aren't already), columns 4-6 give a
+                                    direction non-parallel to the ray that
+                                    defines the s1 polarization axis
+                                    (these will be made normal to the ray
+                                    direction and normalized, if they
+                                    aren't already), and columns 7-10 are
+                                    the stokes parameters s0-s3, giving
+                                    the intensity and polarization of the
+                                    ray ( s0 gives the total intensity,
+                                    and s0^2 >= s1^2 + s2^2 + s3^2, see
+                                    7.2 in Jackson for more details)
+           surfacelist         -  A structure array defining the geometry
+                                    of scattering surfaces -- see
+                                    Create2LGeometry for details
+           max_scatters        -  The maximum number of scatters to
+                                    propagate rays through (the simulation
+                                    may stop before this point if there
+                                    are no rays above threshold left to
+                                    follow).
+           min_travel_length   -  A minimum travel length between
+                                    scatters.  This prevents rounding
+                                    errors from causing a ray to scatter
+                                    multiple times at the same point.
+                                    Rays with legitimate travel lengths
+                                    below this value will be INCORRECTLY
+                                    RECONSTRUCTED, so keep this small
+                                    (~1e-5 times your smallest dimension
+                                    is probably sufficient for most
+                                    geometries.)
+           follow_threshold    -  Refracted or reflected rays with an s0
+                                    below follow_threshold(1) or
+                                    follow_threshold(2), respectively,
+                                    will not be followed.  If
+                                    follow_threshold is a scalar, the same
+                                    threshold is used for both.
+           tir_handling        -   This determines what the refracted_rays
+                                     output is in the case of total internal
+                                     reflection.  The default (-1) gives a
+                                     refracted ray tangent to the surface with
+                                     zero intensity.  Any value >=0 will give
+                                     a ray with the same direction and
+                                     polarization as the reflected ray, with
+                                     intensity equal to the reflected
+                                     intensity times tir_handling.  This lets
+                                     you treat tir-rays like refracted rays,
+                                     which can be handy in geometry sims.
+                                     NOTE -- if follow_threshold(2) is
+                                     bigger than max(rays(:,7)) then
+                                     default tir_handling=1.
+           full_output         -   If false, the ray_interfaces output is
+                                     not populated.  Default is true.
+           singlechild         -   If true, then reflected/refracted rays
+                                     are never both followed, rather one
+                                     is chosen by a dice roll, and the ray
+                                     index is always positive.  If false,
+                                     this follows the old RayTracer
+                                     standard of following both reflected
+                                     and refracted rays, with purely
+                                     refracted trajectories only getting
+                                     the positive index.  Default is true.
+           output_raytable     -   If false, the raytable output is not
+                                     populated.  Default is false.
+
+ output:
+       ray_interfaces  -  a structure array, where the array index is the
+                            scatter number.  Each element in the array has
+                            the following fields:
+           incoming_ray        -  M-by-10 array, where M is the number of
+                                    rays scattering in this iteration,
+                                    giving the direction, intensity, and
+                                    polarization of the incoming rays.
+                                    Rays that do not scatter are not
+                                    reported (to report all rays, enclose
+                                    your geometry in an absorbing box, for
+                                    example).
+           reflected_ray       -  M-by-10 array, giving the direction,
+                                    intensity, and polarization of the
+                                    reflected rays
+           refracted_ray       -  M-by-10 array, giving the direction,
+                                    intensity, and polarization of the
+                                    refracted rays
+           intersection_point  -  M-by-3 array, giving the points where
+                                    the incoming rays scatter
+           surface_normal      -  M-by-3 array, giving the
+                                    backward-pointing surface normal at
+                                    the intersection_point
+           ray_index           -  M-by-1 vector, giving the index of the
+                                    incoming ray (the input rays are
+                                    numbered 1:N) -- a negative ray_index
+                                    means the ray has undergone at least
+                                    one reflection in its history, so
+                                    there will be at most one ray with a
+                                    given positive index
+           surface_index       -  M-by-1 vector, giving the index of the
+                                    scattering surface hit by each
+                                    incoming_ray, where the index
+                                    indicates an element of the input
+                                    surfacelist.  Negative values indicate
+                                    an outward ray, positive values an
+                                    inward ray, as defined in the
+                                    surface geometry.
+           distace_traveled    -  M-by-1 vector, giving the distance
+                                    traveled by the ray since its last
+                                    scatter
+           n_incident          -  M-by-1 vector, giving the index of
+                                    refraction for the incoming ray
+           n_transmitted       -  M-by-1 vector, giving the index of
+                                    refraction for the refracted ray
+           bulkabs_incident    -  M-by-1 vector, giving the absorption
+                                    length for the incoming ray
+           bulkabs_transmitted -  M-by-1 vector, giving the absorbtion
+                                    length for the refracted ray
+           rayleigh_incident   -  M-by-1 vector, giving the rayleigh
+                                    scattering length for the incoming ray
+           rayleigh_transmitted-  M-by-1 vector, giving the rayleigh
+                                    scattering length for the refracted ray
+
+       absorption_table        -  Array of size [K, 5, S, 2], where
+                                    K=max_scatters, S=length(surfacelist)
+                                    Giving total intensity absorbed at
+                                    each scatter step.  2nd index
+                                    separates:
+                                       1 - Surface absorption
+                                       2 - Bulk absorption
+                                       3 - Escaped geometry
+                                       4 - Dropped below threshold
+                                       5 - Still following
+                                     3rd index identifies the surface
+                                     the ray is interacting with in that
+                                     step, 4th index indicates the ray's
+                                     orientation with respect to that
+                                     surface.  For `Escaped geometry'
+                                     rays, the previously hit surface is
+                                     indicated.
+       raytable                -  Array of size [K+1, N, 13] giving the
+                                     details of each ray's path through
+                                     the geometry, following positive ray
+                                     indices only.  First index is scatter
+                                     index, starting with initial
+                                     condition.  Second index is ray
+                                     index.  For third index, columns 1:3
+                                     give XYZ position, 4:13 give ray
+                                     details (direction, intensity,
+                                     polarization, as in rays input).
+                                 
+ 
+ RayTracer:  12/17/09, CED
+ RayTracer2:  8/17/16, CED'''
 import numpy as np
 import numpy.matlib
 import rayInterfaces
@@ -225,8 +225,8 @@ def RayTracer2(ray_startingpoints, rays, surfacelist = [], max_scat = 10, min_tr
     absorption_table = np.zeros((max_scatters, 5, len(surfacelist), 2))
     if output_raytable:
         raytable = np.zeros((max_scatters+1, np.size(ray_startingpoints, 0), 13))
-        raytable[0, :, 0:2] = ray_startingpoints
-        raytable[0, :, 3:12] = rays
+        raytable[0, :, 0:3] = ray_startingpoints
+        raytable[0, :, 3:13] = rays
 
 #    %% check optional fields in surface list, necessary for backwards compatibility
     bulk_props = np.array(['abslength_outside', 'abslength_inside', 'rayleigh_outside', 'rayleigh_inside'], dtype=object)
@@ -509,9 +509,9 @@ def RayTracer2(ray_startingpoints, rays, surfacelist = [], max_scat = 10, min_tr
         
         if output_raytable: # check num_scatters indexing
             raytable_cut = np.logical_and(scatter_cut, (ray_index > 0))
-            ray_ix = round(ray_index[raytable_cut])
-            raytable[num_scatters+1, ray_ix, 0:2] = p_next[raytable_cut, :]
-            raytable[num_scatters+1, ray_ix, 3:12] = refracted_rays[raytable_cut, :]
+            ray_ix = np.around(ray_index[raytable_cut])
+            raytable[num_scatters+1, ray_ix, 0:3] = p_next[raytable_cut, :]
+            raytable[num_scatters+1, ray_ix, 3:13] = refracted_rays[raytable_cut, :]
 
 #        %% get set for next iteration
 #        % follow reflected and refracted rays that are above the follow_threshold
