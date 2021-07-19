@@ -510,8 +510,8 @@ def RayTracer2(ray_startingpoints, rays, surfacelist = [], max_scat = 10, min_tr
         if output_raytable: # check num_scatters indexing
             raytable_cut = np.logical_and(scatter_cut, (ray_index > 0))
             ray_ix = np.around(ray_index[raytable_cut])
-            raytable[num_scatters+1, ray_ix, 0:3] = p_next[raytable_cut, :]
-            raytable[num_scatters+1, ray_ix, 3:13] = refracted_rays[raytable_cut, :]
+            raytable[num_scatters, ray_ix, 0:3] = p_next[raytable_cut, :] #changed indexing to match Python
+            raytable[num_scatters, ray_ix, 3:13] = refracted_rays[raytable_cut, :] #changed indexing to match Python
 
 #        %% get set for next iteration
 #        % follow reflected and refracted rays that are above the follow_threshold
